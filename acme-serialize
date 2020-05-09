@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+import argparse
+import os.path
+import json
+from collections import OrderedDict
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.x509.oid import ExtensionOID
+
+
+def serialize_private_key(file_name):
+    with open(file_name, 'rb') as key_file:
+        private_key = serialization.load_pem_private_key(
+            key_file.read(),
+            password=None,
+            backend=default_backend()
+        )
+        pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        return '\n'.join(str(x) for x in pem.splitlines())
+
+
+def extract_domain_list(file_name):
+    with open(file_name, 'rb') as cert_file:
+        cert = x509.load_pem_x509_certificate(
+            cert_file.read(),
+            default_backend()
+        )
+        ext = cert.extensions.get_extension_for_oid(
+            ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+        )
+        return ext.value.get_values_for_type(x509.DNSName)
+
+
+def serialize_certificate(file_name):
+    with open(file_name, 'rb') as cert_file:
+        cert = x509.load_pem_x509_certificate(
+            cert_file.read(),
+            default_backend()
+        )
+        pem = cert.public_bytes(
+            encoding=serialization.Encoding.PEM
+        )
+        return '\n'.join(str(x) for x in pem.splitlines())
+
+
+def jsonify_entry(name, ecc, alt_name):
+    entry_name = name
+    if ecc:
+        entry_name += '_ecc'
+    basedir = os.path.expanduser('~/.acme.sh/{0}'.format(entry_name))
+    cert_path = os.path.join(basedir, '{0}.cer'.format(name))
+    ca_cert_path = os.path.join(basedir, 'ca.cer')
+    private_key_path = os.path.join(basedir, '{0}.key'.format(name))
+    serialized_name = alt_name if alt_name else name
+    if ecc:
+        serialized_name += '_ecc'
+    obj = OrderedDict([
+        ('name', serialized_name),
+        ('domains', extract_domain_list(cert_path)),
+        ('chain', [
+            serialize_certificate(cert_path),
+            serialize_certificate(ca_cert_path)
+        ]),
+        ('private_key', serialize_private_key(private_key_path))
+    ])
+    return json.dumps(obj, indent=2)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Jsonify acme.sh entry')
+    parser.add_argument('name', type=str, help='acme.sh entry name')
+    parser.add_argument('--ecc', help='load ECC entry', action='store_true')
+    parser.add_argument('--alt-name', help='an alternative name')
+    args = parser.parse_args()
+    r = jsonify_entry(args.name, args.ecc, args.alt_name)
+    print(r)
+
+
+if __name__ == '__main__':
+    main()
